@@ -6,7 +6,7 @@
  *
  * v0.02 - using() support
  * v0.01 - requirements handling
-**/
+ */
 
 /* jshint jquery:true */
 
@@ -16,9 +16,19 @@
     if ($ === undefined) { return false; }
 
     $.dload = {
-        refs: {},   // Library reference locations
-        reqs: {},   // Library requirements
-        defs: {	    // Deferred storage for the $.getScript
+        // Library References - Friendly names for file URLs
+        refs: {
+        	// Example references
+        	"jquery":"//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js",
+        	"ui":"//ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js"
+        },
+        // Library Requirements - arrays of properties in the refs object.
+        reqs: {
+        	// Example requirement
+        	"ui": ["jquery"]
+        },
+        // Promise storage for $.getScript()
+        defs: {
             "jquery": true  // Always loaded b/c we need it for this plugin
         },
         errs: {
