@@ -2,8 +2,9 @@
  * jQuery.using() - Deferred Script Loader
  *
  * @author Samuel Rouse
- * @version 0.03
+ * @version 0.04
  *
+ * v0.04 - major rework: multi-file, multi-type support
  * v0.03 - now in a plugin wrapper, called as $.using()
  * v0.02 - added using() function
  * v0.01 - requirements handling
@@ -14,22 +15,28 @@
 (function( $, undefined ){
     "use strict";
 
-	var debug = false,
-		refs = {
-			// Library References - Friendly names for file URLs
-			// Example references
-			"jquery":"//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js",
-			"ui":"//ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js"
-		},
-		reqs = {
-			// Library Requirements - arrays of properties in the refs object.
-			// Example requirement
-			"ui": ["jquery"]
-		},
-		defs = {	
-			// Promise storage for $.getScript()
+	var settings = {
+            debug : false,
+            linkStyles : false, // Use link tags instead of style tags with the data
+            isXHTML : false,    // Doctype checking (probably excessive)
+            allowXD : false,    // Permit cross-domain requests
+            cacheScripts : true // Don't use $.getScript, it doesn't support caching
+        },
+        myRefs = { // Each short name contains scripts, styles, and requirements
+            "jquery": {
+                scripts: ["//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"],
+                styles: [],
+                requirements: []
+            },
+            "ui": {
+                scripts: [],
+                styles: [],
+                requirements: ["jquery"]
+            }
+        },
+        myPromises = {
+			// Promise storage - both for plug-in short names and full URLs.
 			"jquery":true  // Always loaded b/c we need it for this plugin
-			// if there are scripts we know this page loads, we can access this object and add "promises" for them.
 		},
 		errs = {
             "noref": "The requested script is not in the reference table.",
@@ -39,117 +46,184 @@
             "unknown": "An unknown error has occurred."
         },
 		methods = {
-			debug: function(setDebug) {
-				// Set the debug flag
-				debug = (setDebug === true ? true : false);
-				return debug;
-			},
 			refs: function(newRefs) {
 				// Get/Set references
 				if (newRefs !== undefined) {
-					refs = $.extend({}, refs, newRefs);
+					myRefs = $.extend({}, myRefs, newRefs);
 				}
-				return refs;
+				return myRefs;
 			},
-			reqs: function(newReqs) {
-				// Get/Set requirements
-				if (newReqs !== undefined) {
-					reqs = $.extend({}, reqs, newReqs);
-				}
-				return reqs;
-			},
-			defs: function(newDefs) {
-				// Get/Set Deferred promises
+			promises: function(newPromises) {
+				// Get/Set promises
 				// It may seem strange to "set" promises, 
 				// but you can "complete" manually loaded scripts this way				
-				if (newDefs !== undefined) {
-					defs = $.extend({}, defs, newDefs);
+				if (newPromises !== undefined) {
+					myPromises = $.extend({}, myPromises, newPromises);
 				}
-				return defs;
+				return myPromises;
 			},
 			errs: function(err) {
 				return errs[err];
 			},
-			fetch: function(refName){
-				// First, check for an existing def so we don't waste time
-				if (defs.hasOwnProperty(refName)){
-					return defs[refName];
-				}
+            opts: function(options) {
+                // Extend new options directly into our options object
+                if ( typeof options === "object" ) {
+                   settings = $.extend(true, {}, settings, options);
+                }
+                return settings;
+            }
+        },
+        fetch = function(refName){
+            // First, check for an existing def so we don't waste time
+            if (myPromises.hasOwnProperty(refName)){
+                return myPromises[refName];
+            }
 
-				var myDefer = $.Deferred(),     // Deferred object to return
-					promises = [];              // Promises for .when()
+            var myDefer = $.Deferred(),     // Deferred object to return
+                curPromises = [],           // Promises for .when()
+                curRef = {},                 // Short Reference
+                srcArray = [],              // Loop scripts, styles and requirements
+                srcLen,                     // Length for looping
+                inc;                        // Integer for Looping
 
-				// Save a promise immediately (even if there's no reference)
-				defs[refName] = myDefer.promise();
+            // Save a promise immediately (even if there's no reference)
+            myPromises[refName] = myDefer.promise();
 
-				// See if we have this reference.
-				if (refs.hasOwnProperty(refName)){
-					// Check for requirements
-					if (reqs.hasOwnProperty(refName)) {
-						var reqArray = reqs[refName],
-							inc, reqLen = reqArray.length;
+            // See if we have this reference.
+            if (myRefs.hasOwnProperty(refName)){
+                curRef = myRefs[refName];
 
-						// Recurse through our requirements and collect promises from them.
-						for (inc = 0; inc < reqLen; ++inc) {
-							promises[inc] = methods.fetch(reqArray[inc]);
-						}
-					}
+                // Start with styles, so they are there before the scripts run
+                if ( curRef.hasOwnProperty("styles") &&
+                        curRef.styles instanceof Array &&
+                        curRef.styles.length ) {
+                    srcArray = curRef.styles;
+                    srcLen = srcArray.length;
 
-					//Logging
-					if (debug) {
-						console.log("$.using(\"fetch\", " + refName + ") - " + (reqs[refName] ? reqs[refName] : ""));
-					}
-					
-					// Apply the array of requirements to .when()
-					// If it's an empty array, .when() will treat it as a success
-					// Then use .fail() for error handling and .done() for Success.
-					$.when.apply($,promises).fail(function(errType){
-						// Logging
-						if (debug) { console.log("$.using(\"fetch\", " + refName + ") Failed with " + errType); }
-						
-						// adjust some error types for requirements, and not the original fetch
-						if (errType === "noref" || errType === "noreq") {
-							myDefer.rejectWith(this,["noreq"]);
-						} else if (errType === "badres" || errType === "badreq") {
-							myDefer.rejectWith(this,["badreq"]);
-						} else {
-							myDefer.rejectWith(this,["unknown"]);
-						}
-					}).done(function(){
-						// Logging
-						if (debug) { console.log("$.using(\"fetch\", " + refName + ") Succeeded"); }
-					
-						// Our requirements are complete, make the actual script call.
-						$.getScript(refs[refName]).then(
-							// .then() is shorthand for .done() and .fail()
-							function(){ myDefer.resolve(); },
-							function(){ myDefer.rejectWith(this,["badres"]); }
-						);
-					});
-				} else {
-					// No reference? Automatic rejection
-					myDefer.rejectWith(this,["noref"]);
-				}
+                    // Loop through requirements and collect promises from them.
+                    for ( inc = 0; inc < srcLen; ++inc ) {
+                        curPromises.push( fetchURL( srcArray[inc], "style" ) );
+                    }
+                }
 
-				// Pass back the promise
-				return defs[refName];
-			},
-			init: function(reqArray){
-				// Check for the refName type... always make an array
-				if (!(reqArray instanceof Array)) { reqArray = [reqArray]; }
+                // Check for requirements, next
+                if ( curRef.hasOwnProperty("requirements") &&
+                        curRef.requirements instanceof Array &&
+                        curRef.requirements.length ) {
+                    srcArray = curRef.requirements;
+                    srcLen = srcArray.length;
 
-				var promises = [],   // Array of promises
-					reqLen = reqArray.length, inc;
+                    // Loop through requirements and collect promises from them.
+                    for (inc = 0; inc < srcLen; ++inc) {
+                        curPromises.push( fetch( srcArray[inc] ) );
+                    }
+                }
 
-				// Collect promises for any requirements
-				for (inc = 0; inc < reqLen; ++inc) {
-					promises[inc] = methods.fetch(reqArray[inc]);
-				}
+                // Apply the array of requirements to .when()
+                // If it's an empty array, .when() will treat it as a success
+                // Then use .fail() for error handling and .done() for Success.
+                $.when.apply($,curPromises).fail(function(errType){
+                    handleFetchError(refName, myDefer, errType);
+                }).done(function(){
 
-				// Return a single promise for the requirements
-				return $.when.apply($,promises).promise();
-			}
-		};
+                    // Our styles & requirements are complete. Get our script(s)
+                    if (curRef.hasOwnProperty("scripts") && curRef.scripts instanceof Array && curRef.scripts.length ) {
+                        srcArray = curRef.scripts;
+                        srcLen = srcArray.length;
+
+                        // Collect promises just like anything else
+                        for (inc = 0; inc < srcLen; ++inc) {
+                            curPromises.push( fetchURL( srcArray[inc], "script" ) );
+                        }
+                    }
+
+                    // Finally, apply all the promises for this reference
+                    $.when.apply($,curPromises).then(
+                        // .then() is shorthand for .done() and .fail()
+                        function(){ myDefer.resolve(); },
+                        function(){ myDefer.rejectWith(this,["badres"]); }
+                    );
+                });
+            } else {
+                // No reference? Automatic rejection
+                myDefer.rejectWith(this,["noref"]);
+            }
+
+            // Pass back the promise
+            return myPromises[refName];
+        },
+        fetchURL = function(url, itemType) {
+            // Check for an existing request for this url and return the promise
+            if ( myPromises.hasOwnProperty(url) ) { return myPromises[url]; }
+
+            // Create the Deferred and store the promise.
+            var myDefer = new $.Deferred();
+            myPromises[url] = myDefer.promise();
+
+            // Make the request
+            if (itemType === "script") {
+                $.ajax({
+                    url: url,
+                    dataType: "script",
+                    cache: !!(settings.cacheScripts),
+                    async: true,
+                    crossDomain: !!(settings.allowXD)
+                }).then(
+                    // .then() is shorthand for .done() and .fail()
+                    function(){ myDefer.resolve(); },
+                    function(){ myDefer.rejectWith( this, ["badres"] ); }
+                );
+            } else if (itemType === "style") {
+                $.ajax(url).then(
+                    // .then() is shorthand for .done() and .fail()
+                    function(data){
+                        addStyles(data);
+                        myDefer.resolve(); },
+                    function(){ myDefer.rejectWith( this, ["badres"] ); }
+                );
+            }
+
+            // Hand back the same promise we created before.
+            return myPromises[url];
+        },
+        addStyles = function(url, data) {
+            var cssHTML;
+
+            // Support both linked stylesheets and style data on the page.
+            if (settings.linkStyles) {
+                cssHTML = '<link rel="stylesheet" href="' + url + '"' + ( settings.isXHTML ? " />" : ">" );
+            } else {
+                cssHTML = '<style' + ( settings.isXHTML ? ' type="text/css"' : "" ) +  ">\n" + data + "\n</style>";
+            }
+
+            $('head').append(cssHTML);
+        },
+        handleFetchError = function(refName, myDefer, errType) {
+
+            // adjust some error types for requirements, and not the original fetch
+            if (errType === "noref" || errType === "noreq") {
+                myDefer.rejectWith(this,["noreq"]);
+            } else if (errType === "badres" || errType === "badreq") {
+                myDefer.rejectWith(this,["badreq"]);
+            } else {
+                myDefer.rejectWith(this,["unknown"]);
+            }
+        },
+        init = function(reqArray){
+            // Check for the refName type... always make an array
+            if (!(reqArray instanceof Array)) { reqArray = [reqArray]; }
+
+            var reqPromises = [],   // Array of promises
+                reqLen = reqArray.length, inc;
+
+            // Collect promises for any requirements
+            for (inc = 0; inc < reqLen; ++inc) {
+                reqPromises[inc] = fetch(reqArray[inc]);
+            }
+
+            // Return a single promise for the requirements
+            return $.when.apply($,reqPromises).promise();
+        };
 
 	$.using = function( method ) {
     
@@ -157,7 +231,18 @@
 		if ( methods[method] ) {
 			return methods[ method ].apply( this, Array.prototype.slice.call( arguments, 1 ));
 		} else {
-			return methods.init.apply( this, arguments );
+			return init.apply( this, arguments );
 		}   
 	};
+
+    // Tests for doctype. This could throw errors.
+    try {
+        // Internet Explorer tests first
+        if (typeof document.documentElement.previousSibling.nodeValue !== "null" &&
+            document.documentElement.previousSibling.nodeValue.toLowerCase().indexOf("xhtml") !== -1) {
+            settings.isXHTML = true;
+        } else if (document.documentElement.previousSibling.valueOf().toLowerCase().indexOf() !== -1) {
+            settings.isXHTML = true;
+        }
+    } catch (e) { settings.errCount++; }
 })( jQuery );
