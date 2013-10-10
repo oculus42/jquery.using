@@ -2,8 +2,9 @@
  * jQuery.using() - Deferred Script Loader
  *
  * @author Samuel Rouse
- * @version 0.2
+ * @version 0.2.1
  *
+ * v0.2.1 - cleanup
  * v0.2 - changed to public methods, code cleanup.
  * v0.1.1 - fixed .resolveWith() parameters
  * v0.1 - implemented loader plugins
@@ -59,7 +60,7 @@
 			}
 		},
 		fetchOrder = {
-			// Sequence of different modules to try
+			// Sequence of different modules to try; LIFO ordering
 			// return a Boolean false if it should try the next module
 			"script": ["getScript", "loadScript"],
 			"style": ["getStyle"],
@@ -142,6 +143,20 @@
 				}
 			}
 		},
+		trackTime = function(url, startTime) {
+			myLoadTimes[url] = (new Date()).getTime() - startTime;
+		},
+		handleFetchError = function(myDefer, errType) {
+
+			// adjust some error types for requirements, and not the original fetch
+			if (errType === "noref" || errType === "noreq") {
+				myDefer.rejectWith( this, ["noreq"] );
+			} else if (errType === "badres" || errType === "badreq") {
+				myDefer.rejectWith( this, ["badreq"] );
+			} else {
+				myDefer.rejectWith( this, ["unknown"] );
+			}
+		},
 		fetch = function(refName){		
 			// First, check for an existing def so we don't waste time
 			if (myPromises.hasOwnProperty(refName)){
@@ -201,11 +216,10 @@
 						srcArray = curRef[el];
 						srcLen = srcArray.length;
 
-						// Loop through styles and collect promises from them.
+						// Loop through and collect promises from them.
 						for ( inc = 0; inc < srcLen; ++inc ) {
 							curPromises.push( fetchURL( srcArray[inc], el ) );
 						}
-
 					}
 				}
 
@@ -248,7 +262,7 @@
 
 			// Pass back the promise
 			return myPromises[refName];
-		},
+		},		
 		fetchURL = function(url, type, passedDefer) {
 
 			var fetchRes = false,
@@ -271,14 +285,15 @@
 
 			while ( inc > 0 && fetchRes === false ) {
 				
-				inc--; // Happens first b/c length is index + 1, and makes later logic easier.
+				// Happens first b/c length is index + 1, and makes later logic easier.
+				inc--;
 			
 				// Get the current time for request time tracking
 				// Set inside the loop so previous module errors aren't counted.
-				// 0.2 - replaced Date.now() for old IE compatibility.
 				startTime = (new Date()).getTime();
 
 				try {
+					// Try to run the module in the order for the type and sequence
 					fetchRes = fetchModules[fetchOrder[type][inc]].call(this,url);
 				} catch (e) { /* */ }
 				
@@ -290,38 +305,30 @@
 			if ( fetchRes !== false ) {
 				fetchRes.then(
 					// .then() is shorthand for .done() and .fail()
-					function(){ 
+					function(){
+						trackTime(url, startTime);
 						$('html').trigger("using",[type, url, fetchOrder[type][inc]]);
-						myDefer.resolveWith( this, arguments ); },
-					function(){ myDefer.rejectWith( this, ["badres"] ); }
-				).always(function(){
-					myLoadTimes[url] = (new Date()).getTime() - startTime;
-				});
+						myDefer.resolveWith( this, arguments );
+					},
+					function(){ 
+						trackTime(url, startTime);
+						myDefer.rejectWith( this, ["badres"] );
+					}
+				);
 			} else {
+				trackTime(url,startTime);
 				// Module was unable to be loaded.
 				myDefer.rejectWith( this, ["badres"] );
-				myLoadTimes[url] = (new Date()).getTime() - startTime;
 			}
 
 			// Hand back the same promise we created before.
 			return myPromises[url];
 		},
-		handleFetchError = function(myDefer, errType) {
-
-			// adjust some error types for requirements, and not the original fetch
-			if (errType === "noref" || errType === "noreq") {
-				myDefer.rejectWith( this, ["noreq"] );
-			} else if (errType === "badres" || errType === "badreq") {
-				myDefer.rejectWith( this, ["badreq"] );
-			} else {
-				myDefer.rejectWith( this, ["unknown"] );
-			}
-		},
 		init = function(){
 
 			var reqArray = arguments,
-				reqPromises = [],	// Array of promises
 				reqLen = reqArray.length,
+				reqPromises = [],	// Array of promises
 				inc;
 
 			// Collect promises for any requirements
@@ -340,14 +347,12 @@
 		method;
 
 	$.using = function( ) {
-		// Everything is a fetch request
 		return init.apply( this, arguments );
 	};
 	
-		// Publicize the methods, better that the slice.call pattern above
+	// Publicize the methods, better that the slice.call pattern above
 	for ( method in methods ) {
 		if ( methods.hasOwnProperty(method) ) { publicizeMethod(method); }
 	}
 	$.using.settings = settings;
-	
 })( jQuery );
